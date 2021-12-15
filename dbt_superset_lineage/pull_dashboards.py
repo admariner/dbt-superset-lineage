@@ -43,9 +43,7 @@ def get_tables_from_sql(sql, dialect):
                         sql, exc_info=e)
         tables_cleaned = get_tables_from_sql_simple(sql)
 
-    tables = list(set(tables_cleaned))
-
-    return tables
+    return list(set(tables_cleaned))
 
 
 def get_tables_from_dbt(dbt_manifest, dbt_db_name):
@@ -90,14 +88,13 @@ def get_dashboards_from_superset(superset, superset_url, superset_db_id):
         logging.info("Getting page %d.", page_number + 1)
         res = superset.request('GET', f'/dashboard/?q={{"page":{page_number},"page_size":100}}')
         result = res['result']
-        if result:
-            for r in result:
-                if r['published']:
-                    dashboards_id.append(r['id'])
-            page_number += 1
-        else:
+        if not result:
             break
 
+        for r in result:
+            if r['published']:
+                dashboards_id.append(r['id'])
+        page_number += 1
     assert dashboards_id, "There are no dashboards in Superset!"
 
     logging.info("There are %d published dashboards in Superset.", len(dashboards_id))
@@ -166,41 +163,40 @@ def get_datasets_from_superset(superset, dashboards_datasets, dbt_tables,
         logging.info("Getting page %d.", page_number + 1)
         res = superset.request('GET', f'/dataset/?q={{"page":{page_number},"page_size":100}}')
         result = res['result']
-        if result:
-            for r in result:
-                name = r['table_name']
-                schema = r['schema']
-                database_name = r['database']['database_name']
-                database_id = r['database']['id']
-
-                dataset_key = f'{schema}.{name}'  # same format as in dashboards
-
-                # only add datasets that are in dashboards, optionally limit to one database
-                if dataset_key in dashboards_datasets \
-                        and (superset_db_id is None or database_id == superset_db_id):
-                    kind = r['kind']
-                    if kind == 'virtual':  # built on custom sql
-                        sql = r['sql']
-                        tables = get_tables_from_sql(sql, sql_dialect)
-                        tables = [table if '.' in table else f'{schema}.{table}'
-                                  for table in tables]
-                    else:  # built on tables
-                        tables = [dataset_key]
-                    dbt_refs = [dbt_tables[table]['ref'] for table in tables
-                                if table in dbt_tables]
-
-                    datasets[dataset_key] = {
-                        'name': name,
-                        'schema': schema,
-                        'database': database_name,
-                        'kind': kind,
-                        'tables': tables,
-                        'dbt_refs': dbt_refs
-                    }
-            page_number += 1
-        else:
+        if not result:
             break
 
+        for r in result:
+            name = r['table_name']
+            schema = r['schema']
+            database_name = r['database']['database_name']
+            database_id = r['database']['id']
+
+            dataset_key = f'{schema}.{name}'  # same format as in dashboards
+
+            # only add datasets that are in dashboards, optionally limit to one database
+            if dataset_key in dashboards_datasets \
+                    and (superset_db_id is None or database_id == superset_db_id):
+                kind = r['kind']
+                if kind == 'virtual':  # built on custom sql
+                    sql = r['sql']
+                    tables = get_tables_from_sql(sql, sql_dialect)
+                    tables = [table if '.' in table else f'{schema}.{table}'
+                              for table in tables]
+                else:  # built on tables
+                    tables = [dataset_key]
+                dbt_refs = [dbt_tables[table]['ref'] for table in tables
+                            if table in dbt_tables]
+
+                datasets[dataset_key] = {
+                    'name': name,
+                    'schema': schema,
+                    'database': database_name,
+                    'kind': kind,
+                    'tables': tables,
+                    'dbt_refs': dbt_refs
+                }
+        page_number += 1
     return datasets
 
 
@@ -224,20 +220,23 @@ def get_exposures_dict(dashboards, exposures):
     assert len(set(titles)) == len(titles), "There are duplicate dashboard names!"
 
     exposures_orig = {exposure['url']: exposure for exposure in exposures}
-    exposures_dict = [{
-        'name': dashboard['title'],
-        'type': 'dashboard',
-        'url': dashboard['url'],
-        # get descriptions from original file through url (unique as it's based on dashboard id)
-        'description': exposures_orig.get(dashboard['url'], {}).get('description', ''),
-        'depends_on': dashboard['refs'],
-        'owner': {
-            'name': dashboard['owner_name'],
-            'email': dashboard['owner_email']
+    return [
+        {
+            'name': dashboard['title'],
+            'type': 'dashboard',
+            'url': dashboard['url'],
+            # get descriptions from original file through url (unique as it's based on dashboard id)
+            'description': exposures_orig.get(dashboard['url'], {}).get(
+                'description', ''
+            ),
+            'depends_on': dashboard['refs'],
+            'owner': {
+                'name': dashboard['owner_name'],
+                'email': dashboard['owner_email'],
+            },
         }
-    } for dashboard in dashboards]
-
-    return exposures_dict
+        for dashboard in dashboards
+    ]
 
 
 class YamlFormatted(ruamel.yaml.YAML):
